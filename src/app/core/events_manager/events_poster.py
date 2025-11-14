@@ -146,18 +146,15 @@ class EventPoster:
             self.logger.error(f"Error initializing MongoDB: {e}")
             self.use_mongodb = False
 
-    def _upload_to_b2(self, local_filepath, filename):
+    def _upload_to_b2(self, local_filepath, filename, folder="videos"):
         def upload_file():
             try:
                 if not self.b2_bucket:
                     self.logger.error("B2 bucket not initialized")
                     return False
 
-                bucket_filename = filename
-                if self.b2_folder_path:
-                    folder_path = self.b2_folder_path.strip('/')
-                    if folder_path:
-                        bucket_filename = f"{folder_path}/{filename}"
+                # Use specified folder instead of b2_folder_path for thumbnails
+                bucket_filename = f"{folder}/{filename}"
 
                 self.b2_bucket.upload_local_file(
                     local_file=local_filepath,
@@ -183,6 +180,25 @@ class EventPoster:
             self.executor.submit(upload_file)
         else:
             self.logger.warning("Cloud storage not available for upload")
+
+    def _generate_and_upload_thumbnail(self, frame, filename):
+        """Generate a thumbnail from the frame and upload to B2"""
+        try:
+            # Resize frame to thumbnail size (320x180 for 16:9 aspect ratio)
+            thumbnail = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
+
+            # Save thumbnail locally
+            thumbnail_path = os.path.join(self.output_dir, filename)
+            cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+            self.logger.info(f"Generated thumbnail: {filename}")
+
+            # Upload to B2 in thumbnails folder
+            if self.use_cloud_storage:
+                self._upload_to_b2(thumbnail_path, filename, folder="thumbnails")
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate thumbnail {filename}: {e}")
 
     def _save_metadata_to_mongodb(self, video_metadata):
         def save_metadata():
@@ -297,11 +313,10 @@ class EventPoster:
 
                         if frames_written == 0:
                             self.logger.info(f"First frame properties - Shape: {frame.shape}, dtype: {frame.dtype}, min: {frame.min()}, max: {frame.max()}")
-                            
-                            # Save first frame as image for debugging
-                            debug_img_path = os.path.join(self.output_dir, f"debug_frame_{frame_data.frame_id}.jpg")
-                            cv2.imwrite(debug_img_path, frame)
-                            self.logger.info(f"Saved debug frame: {debug_img_path}")
+
+                            # Generate and save thumbnail from first frame
+                            thumbnail_filename = f"{os.path.splitext(filename)[0]}.jpg"
+                            self._generate_and_upload_thumbnail(frame, thumbnail_filename)
                         
                         writer.write(frame)
                         frames_written += 1
