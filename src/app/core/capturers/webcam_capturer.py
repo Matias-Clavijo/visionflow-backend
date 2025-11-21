@@ -157,14 +157,16 @@ class WebcamCapturer:
 
                 # Create FrameData object
                 frame_id = str(uuid.uuid4())
+                current_timestamp = time.time()
                 frame_data = FrameData(
                     frame_id=frame_id,
                     frame=frame,
+                    timestamp=current_timestamp,
                     metadata={
                         'capturer_name': self.name,
                         'device_name': self.device_name,
                         'device_index': self.device_index,
-                        'timestamp': time.time(),
+                        'timestamp': current_timestamp,
                         'frame_count': self.frame_count,
                         'shape': frame.shape
                     }

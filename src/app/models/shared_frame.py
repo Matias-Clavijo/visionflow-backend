@@ -7,7 +7,7 @@ from multiprocessing.shared_memory import SharedMemory
 logger = logging.getLogger(__name__)
 
 class SharedFramePool:
-    def __init__(self, n_buffers, shape, dtype=np.uint8, name="Processor"):
+    def __init__(self, n_buffers, shape, dtype=np.uint8, name="Processor", ctx=None):
         self.shape = shape
         self.dtype = dtype
         self.n_buffers = n_buffers
@@ -17,8 +17,8 @@ class SharedFramePool:
         self._local_arrays = {}  # idx -> np.ndarray (per-process cache)
         self._local_shms = {}    # idx -> SharedMemory (per-process handles)
 
-        # Get multiprocessing context
-        ctx = mp.get_context()
+        # Get multiprocessing context (prefer provided one to keep start method consistent)
+        self.ctx = ctx or mp.get_context()
         
         # Always use SharedMemory buffers and multiprocessing primitives
         buffer_bytes = int(np.prod(shape) * np.dtype(dtype).itemsize)
@@ -39,12 +39,12 @@ class SharedFramePool:
             self._local_arrays[len(self._local_arrays)] = arr
 
         # Process-safe primitives
-        self.locks = [ctx.Lock() for _ in range(n_buffers)]
-        self.ref_counts_lock = ctx.Lock()
+        self.locks = [self.ctx.Lock() for _ in range(n_buffers)]
+        self.ref_counts_lock = self.ctx.Lock()
 
         # Use a shared array for ref counts; protect with per-buffer lock + global for sums
-        self.ref_counts = ctx.Array('i', [0] * n_buffers, lock=False)
-        self.free = ctx.Queue()
+        self.ref_counts = self.ctx.Array('i', [0] * n_buffers, lock=False)
+        self.free = self.ctx.Queue()
         for i in range(n_buffers):
             self.free.put(i)
 

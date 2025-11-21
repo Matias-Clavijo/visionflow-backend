@@ -17,11 +17,12 @@ class FrameDescriptor:
 
 
 class FrameQueueManager:
-    def __init__(self, pool: SharedFramePool):
+    def __init__(self, pool: SharedFramePool, ctx=None):
         self.pool = pool
         self.queues = {}
 
-        self.ctx = mp.get_context()
+        # Keep context configurable so we can force a fork-based start method
+        self.ctx = ctx or mp.get_context()
 
     def get_pool(self):
         return self.pool

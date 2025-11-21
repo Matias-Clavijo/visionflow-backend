@@ -70,7 +70,7 @@ def create_default_config():
             "use_cloud_storage": True,
             "b2_folder_path": "videos",
             "clip_duration": 30,
-            "fps": 25.0,
+            "fps": 30.0,
             "codec": "mp4v",
             "container": "mp4",
             "quality": 100,

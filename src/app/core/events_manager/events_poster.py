@@ -19,34 +19,38 @@ from src.app.models.shared_frame import SharedFramePool
 
 
 class EventPoster:
-    def __init__(self, params):
+    def __init__(self, params, on_clip_created=None):
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.config = params or {}
 
-        self.output_dir = resolve_path(params.get("output_dir", "output/video_clips"))
-        self.name = params.get("name")
-        self.clip_duration = params.get("clip_duration", 10.0)
-        self.fps = params.get("fps", 30.0)
-        self.codec = params.get("codec", "avc1")
-        self.container = params.get("container", "mp4")
+        self.output_dir = resolve_path(self.config.get("output_dir", "output/video_clips"))
+        self.name = self.config.get("name")
+        self.clip_duration = self.config.get("clip_duration", 10.0)
+        self.fps = self.config.get("fps", 30.0)
+        self.codec = self.config.get("codec", "avc1")
+        self.container = self.config.get("container", "mp4")
 
-        self.max_resolution = params.get("max_resolution", None)
-        self.buffer_size = params.get("buffer_size", 1000)
+        self.max_resolution = self.config.get("max_resolution", None)
+        self.buffer_size = self.config.get("buffer_size", 1000)
 
-        self.use_cloud_storage = params.get("use_cloud_storage", False)
-        self.b2_app_key_id = params.get("b2_app_key_id", "005a7351082aa2d0000000001")
-        self.b2_app_key = params.get("b2_app_key", "K005HOQbGe1cEaos7n3PSkB9KvdIhao")
-        self.b2_bucket_name = params.get("b2_bucket_name", "visionflow-v1")
-        self.b2_folder_path = params.get("b2_folder_path", "")
-        self.keep_local_copy = params.get("keep_local_copy", True)
+        self.use_cloud_storage = self.config.get("use_cloud_storage", False)
+        self.b2_app_key_id = self.config.get("b2_app_key_id", "005a7351082aa2d0000000001")
+        self.b2_app_key = self.config.get("b2_app_key", "K005HOQbGe1cEaos7n3PSkB9KvdIhao")
+        self.b2_bucket_name = self.config.get("b2_bucket_name", "visionflow-v1")
+        self.b2_folder_path = self.config.get("b2_folder_path", "")
+        self.keep_local_copy = self.config.get("keep_local_copy", True)
 
-        self.use_mongodb = params.get("use_mongodb", False)
-        self.mongo_uri = params.get("mongo_uri", None)
-        self.mongo_host = params.get("mongo_host", "localhost")
-        self.mongo_port = params.get("mongo_port", 27017)
-        self.mongo_database = params.get("mongo_database", "visionflow")
-        self.mongo_collection = params.get("mongo_collection", "video_clips")
-        self.mongo_username = params.get("mongo_username", None)
-        self.mongo_password = params.get("mongo_password", None)
+        self.use_mongodb = self.config.get("use_mongodb", False)
+        self.mongo_uri = self.config.get("mongo_uri", None)
+        self.mongo_host = self.config.get("mongo_host", "localhost")
+        self.mongo_port = self.config.get("mongo_port", 27017)
+        self.mongo_database = self.config.get("mongo_database", "visionflow")
+        self.mongo_collection = self.config.get("mongo_collection", "video_clips")
+        self.mongo_username = self.config.get("mongo_username", None)
+        self.mongo_password = self.config.get("mongo_password", None)
+
+        # Optional callback to notify clip lifecycle (started/completed/failed)
+        self.on_clip_created = on_clip_created
 
         self.b2_api = None
         self.b2_bucket = None
@@ -80,6 +84,11 @@ class EventPoster:
         self.frames_data_pool: SharedFramePool | None = None
         self.frames_descriptors: deque = deque(maxlen=self.previous_frame_context_count + self.after_frame_context_count + 1)
 
+        # Anti-overlap: minimum cooldown between clips (in seconds)
+        # This prevents generating overlapping clips from continuous detections
+        self.min_clip_cooldown = params.get("min_clip_cooldown", self.clip_duration)  # Default: same as clip duration
+        self.last_clip_generated_time = 0
+
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.logger.info(f"VideoClipGenerator initialized:")
@@ -88,6 +97,7 @@ class EventPoster:
         self.logger.info(f"  FPS: {self.fps}")
         self.logger.info(f"  Frames per clip: {self.frames_per_clip}")
         self.logger.info(f"  Buffer size: {self.buffer_size}")
+        self.logger.info(f"  Anti-overlap cooldown: {self.min_clip_cooldown}s (prevents overlapping clips)")
         self.logger.info(f"  Cloud storage enabled: {self.use_cloud_storage}")
         if self.use_cloud_storage:
             self.logger.info(f"  B2 bucket: {self.b2_bucket_name}")
@@ -245,13 +255,167 @@ class EventPoster:
 
         return frame
 
+    def write_clip_from_numpy_frames(self, frames, detections, source="frontend"):
+        """Create a video clip from a list of numpy frames (BGR) and upload/save metadata."""
+        if not frames:
+            self.logger.warning("No frames provided for clip generation")
+            return
+
+        now_sec = int(time.time())
+        # Use frame_id as filename base (without .mp4 extension)
+        frame_id = f"clip_{source}_{now_sec}"
+        filename = f"{frame_id}.mp4"
+
+        def write_and_upload():
+            writer = None
+            try:
+                # Notify start
+                if self.on_clip_created:
+                    try:
+                        self.on_clip_created({
+                            "status": "started",
+                            "frame_id": frame_id,
+                            "timestamp": now_sec,
+                            "filename": filename,
+                            "source": source,
+                        })
+                    except Exception as emit_exc:  # noqa: BLE001
+                        self.logger.error(f"Failed to emit clip_created(started): {emit_exc}")
+
+                sample_frame = self._resize_frame_if_needed(frames[0])
+                height, width = sample_frame.shape[:2]
+
+                filepath = os.path.join(self.output_dir, filename)
+                fourcc = cv2.VideoWriter_fourcc(*self.codec)
+                writer = cv2.VideoWriter(filepath, fourcc, self.fps, (width, height))
+
+                written = 0
+                for frame in frames:
+                    frame_resized = self._resize_frame_if_needed(frame)
+                    if frame_resized is None or frame_resized.size == 0:
+                        continue
+                    if len(frame_resized.shape) != 3 or frame_resized.shape[2] != 3:
+                        continue
+                    if frame_resized.dtype != np.uint8:
+                        frame_resized = frame_resized.astype(np.uint8)
+
+                    writer.write(frame_resized)
+                    written += 1
+
+                writer.release()
+                writer = None
+                if written == 0:
+                    self.logger.warning("No valid frames written; skipping upload/metadata")
+                    return
+
+                # Thumbnail from first frame (use frame_id as filename base)
+                thumbnail_filename = f"{frame_id}.jpg"
+                self._generate_and_upload_thumbnail(sample_frame, thumbnail_filename)
+
+                # Upload video
+                storage_path = f"{self.b2_folder_path or 'videos'}/{filename}"
+                self._upload_to_b2(filepath, filename, folder=self.b2_folder_path or "videos")
+
+                # Save metadata
+                tags = []
+                for det in detections:
+                    try:
+                        bbox = det.get("bbox", [0, 0, 0, 0])
+                        x, y, w, h = bbox
+                        tags.append({
+                            "class_id": det.get("class_id", 0),
+                            "class_name": det.get("class", det.get("class_name", "unknown")),
+                            "confidence": det.get("confidence", 0.0),
+                            "bbox": {
+                                "x": x,
+                                "y": y,
+                                "width": w,
+                                "height": h,
+                                "center_x": x + w / 2,
+                                "center_y": y + h / 2,
+                            },
+                        })
+                    except Exception:
+                        continue
+
+                video_metadata = {
+                    "frame_id": frame_id,
+                    "device": self.config.get("device_name", source),
+                    "timestamp": now_sec,
+                    "filename": filename,
+                    "source": source,
+                    # Store as datetime object for proper sorting in MongoDB
+                    "created_at": datetime.now(timezone.utc),
+                    "processor": {
+                        "event": True,
+                        "count": len(tags),
+                        "tags": tags,
+                        "frame_info": {
+                            "width": width,
+                            "height": height,
+                            "channels": 3,
+                        },
+                    },
+                }
+                self._save_metadata_to_mongodb(video_metadata)
+
+                # Notify via callback (fire and forget)
+                if self.on_clip_created:
+                    try:
+                        self.on_clip_created({
+                            "status": "completed",
+                            "frame_id": video_metadata["frame_id"],
+                            "timestamp": video_metadata["timestamp"],
+                            "filename": filename,
+                            "storage_path": storage_path,
+                            "bucket": self.b2_bucket_name,
+                            "source": source,
+                            "detection_count": len(tags),
+                            "video_url": storage_path,
+                        })
+                    except Exception as emit_exc:  # noqa: BLE001
+                        self.logger.error(f"Failed to emit clip_created callback: {emit_exc}")
+
+            except Exception as e:
+                self.logger.error(f"Failed to generate/upload frontend clip: {e}")
+                if self.on_clip_created:
+                    try:
+                        self.on_clip_created({
+                            "status": "failed",
+                            "frame_id": frame_id,
+                            "timestamp": now_sec,
+                            "filename": filename,
+                            "source": source,
+                            "error": str(e),
+                        })
+                    except Exception as emit_exc:  # noqa: BLE001
+                        self.logger.error(f"Failed to emit clip_created(failed): {emit_exc}")
+            finally:
+                if writer is not None:
+                    writer.release()
+
+        # Run in background to avoid blocking request handling
+        self.executor.submit(write_and_upload)
+
     def _should_trigger_clip(self, descriptor: FrameDescriptor) -> bool:
         if not self.event_detected:
-            self.event_detected = descriptor.metadata.get("processor", {}).get("event", False)
-            if self.event_detected:
-                self.event_descriptor = descriptor
+            has_event = descriptor.metadata.get("processor", {}).get("event", False)
+
+            # Check if we're in cooldown period (anti-overlap)
+            current_time = time.time()
+            time_since_last_clip = current_time - self.last_clip_generated_time
+
+            if has_event:
+                if time_since_last_clip < self.min_clip_cooldown:
+                    self.logger.debug(f"Event detected but in cooldown period ({time_since_last_clip:.1f}s < {self.min_clip_cooldown}s). Skipping.")
+                    return False
+                else:
+                    self.event_detected = True
+                    self.event_descriptor = descriptor
+                    self.logger.info(f"Event detected! Starting clip generation (cooldown satisfied: {time_since_last_clip:.1f}s)")
         else:
             self.actual_frame_context_count += 1
+
         return self.actual_frame_context_count == (self.after_frame_context_count + self.previous_frame_context_count) + 1
 
     def _get_clip_frames(self, descriptor: FrameDescriptor):
@@ -346,6 +510,10 @@ class EventPoster:
         self.executor.submit(write_video)
         self.actual_frame_context_count = 0
         self.event_detected = False
+
+        # Update last clip generated time for anti-overlap
+        self.last_clip_generated_time = time.time()
+        self.logger.info(f"Clip generation triggered. Next clip can be generated after {self.min_clip_cooldown}s cooldown.")
 
 
 

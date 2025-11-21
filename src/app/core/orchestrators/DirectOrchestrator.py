@@ -1,6 +1,7 @@
 import logging
 import time
 import multiprocessing as mp
+import threading
 
 from src.app.models.frame_data import FrameDataDescriptor, FrameData
 from src.app.models.frames_queue_manager import FrameQueueManager
@@ -11,9 +12,11 @@ logger = logging.getLogger(__name__)
 
 class DirectOrchestrator:
     def __init__(self, pool_shape=(1080,1920,3), pool_buffers=10):
-        ctx = mp.get_context()
+        # Prefer fork on POSIX to avoid pickling issues (OpenCV VideoCapture etc.)
+        start_method = "fork" if "fork" in mp.get_all_start_methods() else mp.get_start_method()
+        self.ctx = mp.get_context(start_method)
         
-        self._lock = ctx.Lock()
+        self._lock = self.ctx.Lock()
         
         self.capturer = None
         self.capture_queue = None  # Now stores actual Queue objects
@@ -33,13 +36,12 @@ class DirectOrchestrator:
         self.frames_processed = 0
 
         # Use multiprocessing primitives for cross-process communication
-        self._running_flag = ctx.Value('i', 0)  # Shared integer for running state
-        self._running_lock = ctx.Lock()
+        self._running_flag = self.ctx.Value('i', 0)  # Shared integer for running state
+        self._running_lock = self.ctx.Lock()
         self.is_running = False
 
     def register_capturer(self, capturer, queue_size):
-        ctx = mp.get_context()
-        output_queue = ctx.Queue(maxsize=queue_size)
+        output_queue = self.ctx.Queue(maxsize=queue_size)
         
         capturer.register_output_queue(output_queue)
         
@@ -61,12 +63,28 @@ class DirectOrchestrator:
         return self
 
     def build(self):
-        manager = FrameQueueManager(SharedFramePool(n_buffers=self.pool_buffers, shape=self.pool_shape, name="CAPTURER"))
+        manager = FrameQueueManager(
+            SharedFramePool(
+                n_buffers=self.pool_buffers,
+                shape=self.pool_shape,
+                name="CAPTURER",
+                ctx=self.ctx,
+            ),
+            ctx=self.ctx,
+        )
         for processor in self.processors:
             manager.create_queue(processor.name, self.capture_queue_size)
         self.capturer_queue_manager = manager
 
-        manager = FrameQueueManager(SharedFramePool(n_buffers=self.pool_buffers, shape=self.pool_shape, name= "EVENTOS"))
+        manager = FrameQueueManager(
+            SharedFramePool(
+                n_buffers=self.pool_buffers,
+                shape=self.pool_shape,
+                name="EVENTOS",
+                ctx=self.ctx,
+            ),
+            ctx=self.ctx,
+        )
         for processor in self.processors:
             manager.create_queue(processor.name, self.processors_queues[processor.name])
             self.events_managers[processor.name].register_pool(manager.get_pool())
@@ -139,13 +157,17 @@ class DirectOrchestrator:
                     )
 
                     frame_data: FrameData = processor.process(data)
-
-                    self.processors_queue_manager.put_frame_in_queue(
-                        frame_data.frame_id,
-                        frame_data.frame,
-                        processor_name,
-                        frame_data.metadata
-                    )
+                    # Detach frame from shared buffer before releasing it
+                    if frame_data is not None and frame_data.frame is not None:
+                        frame_copy = frame_data.frame.copy()
+                        frame_data.frame = frame_copy
+                        # Still put into processor queue if downstream needed
+                        self.processors_queue_manager.put_frame_in_queue(
+                            frame_data.frame_id,
+                            frame_copy,
+                            processor_name,
+                            frame_data.metadata
+                        )
 
                     pool.release(frame_descriptor.shm_idx)
                     
@@ -163,28 +185,30 @@ class DirectOrchestrator:
 
 
     def start_events_manager(self):
-        ctx = mp.get_context()
         for processor in self.processors:
-            p = ctx.Process(
+            # Use threads so web_server globals (frame buffer/socket) stay in-process
+            t = threading.Thread(
                 target=self._block_worker_events,
                 args=(processor.name, self.events_managers[processor.name]),
-                daemon=True
+                daemon=True,
+                name=f"{processor.name}-events-thread",
             )
-            p.start()
-            self.processor_processes.append(p)
-            logger.info(f"Started events process for {processor.name}")
+            t.start()
+            self.processor_processes.append(t)
+            logger.info(f"Started events thread for {processor.name}")
 
     def start_processors(self):
-        ctx = mp.get_context()
         for processor in self.processors:
-            p = ctx.Process(
+            # Run processors in threads to avoid pickling cv2.VideoCapture and to share memory with web server
+            t = threading.Thread(
                 target=self._block_worker_processor,
                 args=(processor.name, processor),
-                daemon=True
+                daemon=True,
+                name=f"{processor.name}-processor-thread",
             )
-            p.start()
-            self.processor_processes.append(p)
-            logger.info(f"Started processor process for {processor.name}")
+            t.start()
+            self.processor_processes.append(t)
+            logger.info(f"Started processor thread for {processor.name}")
 
     def run(self):
         with self._running_lock:
@@ -209,8 +233,7 @@ class DirectOrchestrator:
                     try:
                         frame_data = capturer_queue.get_nowait()
                         if frame_data is not None:
-                            
-                            # Frame is different enough or events detected, process it
+                            # Process frame and broadcast with detector metadata (keeps boxes)
                             self.frames_processed += 1
                             
                             # Put frame in each processor's queue individually to avoid reference counting issues
