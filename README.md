@@ -23,35 +23,24 @@
 
 ## Descripción general
 
-VisionFlow2 es una **canalización open source** que sirve como blueprint para alinear capturadores, procesadores y gestores de eventos antes de escalar a producción. El desarrollo nace bajo dos premisas:
+VisionFlow2 es una prueba de concepto que busca **establecer un diseño convencional** que sirva como base para aplicaciones que buscan utilizar modelos de vision por computadora. El desarrollo nace bajo tres premisas:
 
 1. **Transparencia en la aplicación de modelos**: habilitar que cualquier persona (con o sin perfil técnico) pueda intercambiar modelos de visión en cuestión de minutos, sin configuraciones extensas ni dependencias ocultas.
+2. **Flexibilidad para incorporar requerimientos específicos**: el sistema adopta un enfoque sólido de modularización que permite a los desarrolladores integrar sus propias personalizaciones dentro del flujo de análisis de video, adaptándolo a las necesidades particulares de cada caso de uso.
 2. **Enfoque basado en eventos**: cada detección se trata como un “evento de interés” que puede transformarse en imágenes, clips u otros artefactos persistentes, aplicando reglas como camuflado de zonas sensibles.
 
-Sus objetivos clave son:
 
-- Unificar fuentes RTSP/USB/archivos sin copiar frames innecesariamente.
-- Orquestar detectores Ultralytics YOLO11 según la capacidad del hardware (CPU/CUDA/MPS).
-- Emitir eventos con metadatos ricos, clips MP4 y estadísticas accesibles vía HTTP/Socket.IO.
-- Permitir que los usuarios modifiquen el modelo de visión según necesidades del negocio (por ejemplo, pasar de conteo de personas a detección de sustracciones) sin intervención técnica directa.
 
 ### Caso de estudio
 
 La POC parte de un escenario simple: detectar personas dentro del área cubierta por una cámara. A partir de este caso se definieron **cuatro módulos funcionales** aplicables a proyectos más complejos:
 
 1. **Ingesta de video**: cómo se reciben los frames desde cámaras o streams.
-2. **Procesamiento**: cómo se aplica el modelo de visión y se gestionan estrategias de filtrado/salto de frames.
-3. **Persistencia**: cómo se almacenan los eventos (clips, imágenes, metadatos).
-4. **Interacción y visualización**: cómo el usuario observa resultados y ajusta la configuración.
+2. **Procesamiento**: cómo se aplica el modelo de visión de manera eficiente y optmia teniendo en cuenta los recursos del hardware utilizado.
+3. **Persistencia**: cómo se almacenan los resultados obtenidos (clips, imágenes, metadatos).
+4. **Interacción y visualización**: cómo el usuario observa los resultadosy ajusta el comportamiento del sistema.
 
 Cada módulo cuenta con implementaciones por defecto (ver sección de Arquitectura) pero está pensado para ser extendido con mínima fricción.
-
-## Visuales
-
-- `docs/media/dashboard.png`: ejemplo de tablero web mostrando bounding boxes y métricas FPS.
-- `docs/media/clip-preview.gif`: GIF del clip generado al detectar intrusiones nocturnas.
-
-> Si aún no tienes estos archivos, puedes colocar tus propias capturas en `docs/media/` y actualizar las rutas.
 
 ## Arquitectura de alto nivel
 
@@ -67,6 +56,7 @@ archivo    └──────────┘ │
                 │   Processor(s)  │
                 └─────────────────┘
                          │
+                  SharedFramePool
         ┌────────────────┴──────────────┐
         ▼                               ▼
  Event Manager (Persistencia)     Web Server (Interacción)
@@ -97,16 +87,8 @@ pip install -r requirements.txt
 1. Abrir **System Settings → Privacy & Security → Camera**.
 2. Activar el acceso para `Terminal.app`, `iTerm2` (si lo usas) y `Python`.
 
-### Paso 2 — probar la webcam local
 
-```bash
-cd visionflow-v2   # si no estabas en la carpeta
-python3 test_webcam.py
-```
-
-La consola debe mostrar mensajes como “Webcam opened successfully” y “Frame captured successfully”.
-
-### Paso 3 — levantar el backend
+### Paso 2 — levantar el backend
 
 ```bash
 cd visionflow-v2
@@ -116,7 +98,7 @@ python3 src/app/main_with_web.py
 
 Deja esta terminal abierta. El backend quedará disponible en `http://localhost:5001`.
 
-### Paso 4 — preparar el frontend (una sola vez)
+### Paso 3 — preparar el frontend (una sola vez)
 
 ```bash
 git clone https://github.com/your-org/trabajo-de-grado-frontend.git
@@ -124,7 +106,7 @@ cd trabajo-de-grado-frontend
 npm install
 ```
 
-### Paso 5 — levantar el frontend
+### Paso 4 — levantar el frontend
 
 ```bash
 npm run dev
@@ -259,7 +241,6 @@ Recursos útiles:
 
 - **Issues de GitHub**: problemas técnicos, bugs y solicitudes de features.
 - **Discusiones**: comparte ideas o casos de uso (habilita la pestaña Discussions).
-- **Correo**: `visionflow2-support@example.com` para consultas privadas.
 
 ## Licencia
 
@@ -268,7 +249,6 @@ Este proyecto se desarrolló como Trabajo de Grado en Ingeniería Informática. 
 ## Agradecimientos
 
 - Equipo académico que impulsó el Trabajo de Grado.
-- Comunidad de [Ultralytics](https://github.com/ultralytics/ultralytics) por liberar YOLO11.
 - Autores de plantillas y guías que inspiraron este README.
 
 ---
