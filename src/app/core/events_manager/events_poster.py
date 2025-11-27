@@ -56,9 +56,6 @@ class EventPoster:
         self.b2_bucket = None
         if self.use_cloud_storage:
             self._initialize_b2_api()
-        elif self.use_cloud_storage:
-            self.logger.error("B2SDK not available but cloud storage is enabled. Install b2sdk: pip install b2sdk")
-            self.use_cloud_storage = False
 
         # Initialize MongoDB connection
         self.mongo_client = None
@@ -73,11 +70,8 @@ class EventPoster:
         self.max_workers = params.get("max_workers", 1)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
-        # Initialize running state
-        self._running = True
-
-        self.previous_frame_context_count = 100
-        self.after_frame_context_count = 100
+        self.previous_frame_context_count = int(self.config.get("previous_frame_context_count", 100))
+        self.after_frame_context_count = int(self.config.get("after_frame_context_count", 100))
         self.actual_frame_context_count = 0
         self.event_detected = False
         self.event_descriptor: FrameDescriptor | None = None
@@ -163,7 +157,6 @@ class EventPoster:
                     self.logger.error("B2 bucket not initialized")
                     return False
 
-                # Use specified folder instead of b2_folder_path for thumbnails
                 bucket_filename = f"{folder}/{filename}"
 
                 self.b2_bucket.upload_local_file(
@@ -190,25 +183,6 @@ class EventPoster:
             self.executor.submit(upload_file)
         else:
             self.logger.warning("Cloud storage not available for upload")
-
-    def _generate_and_upload_thumbnail(self, frame, filename):
-        """Generate a thumbnail from the frame and upload to B2"""
-        try:
-            # Resize frame to thumbnail size (320x180 for 16:9 aspect ratio)
-            thumbnail = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
-
-            # Save thumbnail locally
-            thumbnail_path = os.path.join(self.output_dir, filename)
-            cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-            self.logger.info(f"Generated thumbnail: {filename}")
-
-            # Upload to B2 in thumbnails folder
-            if self.use_cloud_storage:
-                self._upload_to_b2(thumbnail_path, filename, folder="thumbnails")
-
-        except Exception as e:
-            self.logger.error(f"Failed to generate thumbnail {filename}: {e}")
 
     def _save_metadata_to_mongodb(self, video_metadata):
         def save_metadata():
@@ -308,10 +282,6 @@ class EventPoster:
                     self.logger.warning("No valid frames written; skipping upload/metadata")
                     return
 
-                # Thumbnail from first frame (use frame_id as filename base)
-                thumbnail_filename = f"{frame_id}.jpg"
-                self._generate_and_upload_thumbnail(sample_frame, thumbnail_filename)
-
                 # Upload video
                 storage_path = f"{self.b2_folder_path or 'videos'}/{filename}"
                 self._upload_to_b2(filepath, filename, folder=self.b2_folder_path or "videos")
@@ -407,7 +377,6 @@ class EventPoster:
 
             if has_event:
                 if time_since_last_clip < self.min_clip_cooldown:
-                    self.logger.debug(f"Event detected but in cooldown period ({time_since_last_clip:.1f}s < {self.min_clip_cooldown}s). Skipping.")
                     return False
                 else:
                     self.event_detected = True
@@ -477,10 +446,6 @@ class EventPoster:
 
                         if frames_written == 0:
                             self.logger.info(f"First frame properties - Shape: {frame.shape}, dtype: {frame.dtype}, min: {frame.min()}, max: {frame.max()}")
-
-                            # Generate and save thumbnail from first frame
-                            thumbnail_filename = f"{os.path.splitext(filename)[0]}.jpg"
-                            self._generate_and_upload_thumbnail(frame, thumbnail_filename)
                         
                         writer.write(frame)
                         frames_written += 1
@@ -520,13 +485,11 @@ class EventPoster:
     def _generate_clip(self, descriptor: FrameDescriptor):
         try:
             clip_frames = self._get_clip_frames(descriptor)
-            print(f"son {len(clip_frames)} frames")
 
             if len(clip_frames) < 5:
                 self.logger.warning(f"Not enough frames for clip generation: {len(clip_frames)}")
                 return
 
-            # Use frame_id as base filename but add proper extension
             base_filename = self.event_descriptor.frame_id
             filename = f"{base_filename}.{self.container}"
 
@@ -554,7 +517,6 @@ class EventPoster:
         try:
             self._add_descriptor(descriptor)
             if self._should_trigger_clip(descriptor):
-                print("generando clip")
                 self._generate_clip(descriptor)
 
             end_time = time.perf_counter()
@@ -564,32 +526,3 @@ class EventPoster:
             self.logger.error(f"Error processing frame in VideoClipGenerator: {e}")
             end_time = time.perf_counter()
             processing_time_ms = (end_time - start_time) * 1000
-
-    def stop(self):
-        self.logger.info("Stopping VideoClipGenerator...")
-        self._running = False
-
-        try:
-            # Generate final clip from remaining frames
-            if len(self.frame_buffer) > 5:
-                self.logger.info(f"Generating final clip from remaining {len(self.frame_buffer)} frames...")
-                self._generate_clip()
-            else:
-                self.logger.debug(f"Skipping final clip generation - only {len(self.frame_buffer)} frames in buffer")
-
-            # Wait for any pending uploads and metadata saves to complete
-            if self.use_cloud_storage or self.use_mongodb:
-                self.logger.info("Waiting for pending uploads and metadata saves to complete...")
-                try:
-                    self.executor.shutdown(wait=True)
-                    self.logger.debug("All background tasks completed successfully")
-                except Exception as e:
-                    self.logger.error(f"Error waiting for background tasks: {e}")
-
-            # Clear frame buffer
-            if hasattr(self, 'frame_buffer'):
-                self.frame_buffer.clear()
-                self.logger.debug("Frame buffer cleared")
-
-        except Exception as e:
-            self.logger.error(f"Error during VideoClipGenerator shutdown: {e}")

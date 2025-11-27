@@ -77,14 +77,9 @@ active_class_filter = None  # None = all classes, or list like ['person', 'cell 
 filter_lock = Lock()
 
 # Frontend clip recorder state
-frontend_clip_config = None
 frontend_clip_recorder = None
-frontend_frames_buffer = None  # deque
-last_frame_data = None  # Store only the latest frame to avoid lag
-last_frame_lock = Lock()
 processing_frame_flag = {'processing': False}  # Dict to allow modification in nested scope
 processing_frame_lock = Lock()
-frontend_last_clip_time = 0.0
 
 
 def set_frame_processor(processor):
@@ -256,7 +251,6 @@ def update_frame_and_detections(frame_data, metadata):
         # Broadcast to all connected clients
         if detections_list:
             socketio.emit('detections', detections_list)
-            logger.debug(f"Broadcasted {len(detections_list)} detections to {len(connected_clients)} clients")
 
 
 def convert_to_frontend_format(processor_data):
@@ -347,7 +341,6 @@ def handle_frame_websocket(data):
     # Skip frame if still processing previous one (avoid lag/buffering)
     with processing_frame_lock:
         if processing_frame_flag['processing']:
-            logger.debug("Skipping frame - still processing previous frame")
             return
         processing_frame_flag['processing'] = True
 
@@ -417,8 +410,6 @@ def handle_frame_websocket(data):
                         # Update detection stats
                         with stats_lock:
                             stats['total_detections'] += len(detections)
-
-                        logger.debug(f"WebSocket: Processed frame, found {len(detections)} detections in {processing_time:.2f}ms")
 
                         # Handle clip recording in background (non-blocking)
                         if frontend_clip_recorder and detections:
@@ -745,7 +736,6 @@ def process_frame():
                         # Broadcast to connected WebSocket clients
                         if detections:
                             socketio.emit('detections', detections)
-                            logger.debug(f"Broadcasted {len(detections)} detections from frontend frame")
 
                     # Clip generation from frontend frames
                     if frontend_clip_recorder is not None:
@@ -797,8 +787,7 @@ def run_server(host='0.0.0.0', port=5000, debug=False, clip_config=None):
         debug: Enable debug mode (default: False)
         clip_config: Optional dict for frontend clip recording (videos to B2/Mongo)
     """
-    global frontend_clip_recorder, frontend_clip_config
-    frontend_clip_config = clip_config
+    global frontend_clip_recorder
 
     if clip_config:
         try:

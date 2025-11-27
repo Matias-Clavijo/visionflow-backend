@@ -6,6 +6,10 @@ Starts both the detection pipeline and Flask/SocketIO web server
 
 # CRITICAL: Gevent monkey-patching with multiprocessing exclusion
 # Patch everything EXCEPT thread/subprocess to avoid conflicts with multiprocessing
+import logging
+
+bootstrap_logger = logging.getLogger(__name__)
+
 try:
     from gevent import monkey
 
@@ -14,11 +18,9 @@ try:
     monkey.patch_socket()
     monkey.patch_ssl()
     monkey.patch_time()
-    print("✓ Gevent partial monkey-patching applied (multiprocessing-safe)")
+    bootstrap_logger.info("✓ Gevent partial monkey-patching applied (multiprocessing-safe)")
 except ImportError:
-    print("⚠ Gevent not installed - falling back to threading mode")
-
-import logging
+    bootstrap_logger.warning("⚠ Gevent not installed - falling back to threading mode")
 import queue
 import socket
 import sys

@@ -1,21 +1,11 @@
-"""
-ObjectDetectorYOLO11 - YOLO11 based object detection with hardware optimization
-
-Supports:
-- Automatic hardware detection (Apple M4/MPS, CUDA/Jetson Nano, Intel/CPU)
-- Dynamic class filtering (person, cell phone, etc.)
-- Auto-export to optimal format (CoreML, TensorRT, OpenVINO)
-- Compatible with existing multiprocessing architecture
-"""
-
 from collections import deque
-import time
-import os
 import logging
+import os
 import platform
-import psutil
+import time
+
 import cv2
-import numpy as np
+import psutil
 
 from src.app.core.utils.string_utils import resolve_path
 from src.app.models.frame_data import FrameData
@@ -24,40 +14,25 @@ logger = logging.getLogger(__name__)
 
 
 def detect_hardware():
-    """
-    Detect hardware configuration and return optimal device settings
-
-    Returns:
-        dict: {
-            'device': str ('mps', 'cuda', 'cpu'),
-            'device_name': str (human readable),
-            'export_format': str ('coreml', 'engine', 'openvino', None),
-            'recommended_pool_buffers': int,
-            'recommended_frame_size': tuple
-        }
-    """
     info = {
         'device': 'cpu',
         'device_name': 'CPU',
         'export_format': None,
         'recommended_pool_buffers': 100,
-        # Use (height, width, channels) to match OpenCV frame shape
         'recommended_frame_size': (480, 640, 3)
     }
 
     try:
         import torch
 
-        # Check for Apple Silicon (M1/M2/M3/M4)
         if torch.backends.mps.is_available():
             info['device'] = 'mps'
             info['device_name'] = f'Apple {platform.processor()} (MPS)'
             info['export_format'] = 'coreml'
             info['recommended_pool_buffers'] = 100
             info['recommended_frame_size'] = (480, 640, 3)
-            logger.info("🍎 Detected Apple Silicon with Metal Performance Shaders")
+            logger.info("Detected Apple Silicon with Metal Performance Shaders")
 
-        # Check for NVIDIA CUDA (Jetson Nano or desktop GPU)
         elif torch.cuda.is_available():
             cuda_device = torch.cuda.get_device_name(0)
             total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
@@ -66,17 +41,15 @@ def detect_hardware():
             info['device_name'] = cuda_device
             info['export_format'] = 'engine'  # TensorRT
 
-            # Jetson Nano has ~4GB RAM, adjust pool accordingly
             if total_memory_gb < 6:
-                logger.info(f"⚡ Detected Jetson device: {cuda_device} ({total_memory_gb:.1f}GB)")
+                logger.info(f"⚡ Detected light device: {cuda_device} ({total_memory_gb:.1f}GB)")
                 info['recommended_pool_buffers'] = 30
                 info['recommended_frame_size'] = (416, 416, 3)
             else:
-                logger.info(f"🎮 Detected CUDA GPU: {cuda_device} ({total_memory_gb:.1f}GB)")
+                logger.info(f"Detected CUDA GPU: {cuda_device} ({total_memory_gb:.1f}GB)")
                 info['recommended_pool_buffers'] = 100
                 info['recommended_frame_size'] = (480, 640, 3)
 
-        # Intel CPU - use OpenVINO for optimization
         else:
             cpu_info = platform.processor() or platform.machine()
             ram_gb = psutil.virtual_memory().total / (1024**3)
@@ -95,64 +68,37 @@ def detect_hardware():
 
 
 class ObjectDetectorYOLO11:
-    """
-    YOLO11-based object detector with automatic hardware optimization
-    """
-
     def __init__(self, params):
-        """
-        Initialize YOLO11 detector
-
-        Args:
-            params (dict): Configuration parameters
-                - name: str - Detector name
-                - model_path: str - Path to YOLO11 model (e.g., 'models/yolo11/yolo11n.pt')
-                - filter_classes: list - Classes to detect (e.g., ['person', 'cell phone'])
-                - confidence_threshold: float - Minimum confidence (default: 0.5)
-                - process_every_n_frames: int - Frame skip (default: 1)
-                - strategy_for_skipped_frames: str - 'DROP' or 'CACHE' (default: 'CACHE')
-                - auto_export: bool - Auto-export to optimal format (default: True)
-                - device: str - Override device detection ('mps', 'cuda', 'cpu', or None for auto)
-        """
         self.name = params.get("name", "yolo11_detector")
         self.model_path = resolve_path(params.get("model_path", "models/yolo11/yolo11n.pt"))
 
-        # Class filtering
         self.filter_classes = params.get("filter_classes", None)  # None = all classes
         self.confidence_threshold = params.get("confidence_threshold", 0.5)
 
-        # Frame processing strategy
         self.process_every_n_frames = params.get("process_every_n_frames", 1)
         self.strategy_for_skipped_frames = params.get("strategy_for_skipped_frames", "CACHE")
 
-        # Auto-export to optimal format
         self.auto_export = params.get("auto_export", True)
 
-        # Hardware detection
         self.hardware_info = detect_hardware()
         self.device = params.get("device") or self.hardware_info['device']
 
-        # Performance tracking
         self.frame_count = 0
         self.frames_processed = 0
         self.processing_times = deque(maxlen=1000)
         self.inference_times = deque(maxlen=1000)
         self.errors_count = 0
 
-        # Caching for skipped frames
         self.last_detections = []
         self.has_to_process = True
-        self.frames_to_cached = 100
+        self.frames_to_cached = params.get("frames_to_cached", 100)
         self.last_similar_frame_with_no_events = None
 
-        # Perceptual hashing for frame similarity
         self.phasher = cv2.img_hash.PHash_create()
 
-        # Model and classes
         self.model = None
         self.class_names = []
 
-        # Load model
         self._load_model()
 
         logger.info(f"✓ {self.name} initialized")
@@ -163,34 +109,27 @@ class ObjectDetectorYOLO11:
             logger.info(f"  Filter: {self.filter_classes}")
 
     def _load_model(self):
-        """Load YOLO11 model with automatic format detection and export"""
         try:
             from ultralytics import YOLO
 
             if not os.path.exists(self.model_path):
                 logger.warning(f"Model not found at {self.model_path}")
                 logger.info("YOLO11 will auto-download on first use")
-                # Ultralytics auto-downloads if model doesn't exist
-                self.model_path = "yolo11n.pt"  # Use default, will download
+                self.model_path = "yolo11n.pt"
 
-            # Load model
             logger.info(f"Loading YOLO11 model from {self.model_path}...")
             self.model = YOLO(self.model_path)
 
-            # Get class names from model
             if hasattr(self.model, 'names'):
                 self.class_names = list(self.model.names.values())
             else:
-                # Default COCO classes
                 self.class_names = self._get_coco_classes()
 
             logger.info(f"Model loaded successfully with {len(self.class_names)} classes")
 
-            # Auto-export to optimal format if enabled
             if self.auto_export and self.hardware_info['export_format']:
                 self._try_export_model()
 
-            # Set model to correct device
             if hasattr(self.model, 'to'):
                 self.model.to(self.device)
                 logger.info(f"Model moved to device: {self.device}")
@@ -203,13 +142,11 @@ class ObjectDetectorYOLO11:
             raise
 
     def _try_export_model(self):
-        """Try to export model to optimal format for hardware"""
         export_format = self.hardware_info['export_format']
 
         if not export_format:
             return
 
-        # Check if exported model already exists
         export_dir = os.path.dirname(self.model_path)
         model_name = os.path.splitext(os.path.basename(self.model_path))[0]
 
@@ -223,29 +160,19 @@ class ObjectDetectorYOLO11:
         export_path = os.path.join(export_dir, f"{model_name}{export_ext}")
 
         if os.path.exists(export_path):
-            logger.info(f"✓ Optimized model already exists: {export_path}")
-            # NOTE: Don't auto-load exported models - they can only predict/val, not train/export
-            # We keep using the .pt model for full flexibility
-            logger.info(f"Keeping .pt model loaded for full YOLO functionality")
+            logger.info(f"Optimized model already exists: {export_path}")
             return
 
-        # Export model
         logger.info(f"Exporting model to {export_format} format...")
-        logger.info("This may take a few minutes on first run...")
 
         try:
             export_path = self.model.export(format=export_format, device=self.device)
-            logger.info(f"✓ Model exported successfully to {export_path}")
-            # NOTE: Don't reload exported model - keep using .pt for full functionality
-            logger.info("Exported model available for future optimized inference")
-            logger.info("Continuing with .pt model for flexibility")
+            logger.info(f"Model exported successfully to {export_path}")
 
         except Exception as e:
-            logger.warning(f"Export to {export_format} failed: {e}")
-            logger.info("Continuing with standard .pt model")
+            logger.warning(f"Export to {export_format} failed: {e}, Continuing with standard .pt model")
 
     def _get_coco_classes(self):
-        """Return default COCO class names"""
         return [
             'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck',
             'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
@@ -294,15 +221,6 @@ class ObjectDetectorYOLO11:
         return indices if indices else None
 
     def process(self, data: FrameData | None) -> FrameData | None:
-        """
-        Process frame with YOLO11 detection
-
-        Args:
-            data: FrameData object containing frame and metadata
-
-        Returns:
-            FrameData with detection results in metadata
-        """
         start_time = time.perf_counter()
 
         # Determine if we should process this frame
@@ -317,12 +235,14 @@ class ObjectDetectorYOLO11:
                 else:
                     should_process = False
                     self.frames_processed += 1
-            # DISABLED: Perceptual hashing is too slow for real-time processing
-            # elif self.last_similar_frame_with_no_events is not None:
-            #     same_image = self.frames_similar_phash(data.frame, self.last_similar_frame_with_no_events)
-            #     if same_image:
-            #         should_process = False
-            #         self.frames_processed += 1
+            elif self.last_similar_frame_with_no_events is not None:
+                same_image = self.frames_similar_phash(
+                    data.frame,
+                    self.last_similar_frame_with_no_events,
+                )
+                if same_image:
+                    should_process = False
+                    self.frames_processed += 1
 
         self.frame_count += 1
         frame = data.frame
@@ -419,15 +339,12 @@ class ObjectDetectorYOLO11:
             total_processing_ms = (end_time - start_time) * 1000
             self.processing_times.append(total_processing_ms)
 
-            # Cache detections
             self.last_detections = detections.copy()
             self.has_to_process = not (len(detections) != 0)
 
-            # DISABLED: Copying full frames is too slow
-            # if len(detections) == 0:
-            #     self.last_similar_frame_with_no_events = frame.copy()
+            if len(detections) == 0:
+                self.last_similar_frame_with_no_events = frame.copy()
 
-            # Add metadata
             data.metadata["processor"] = {
                 "count": len(detections),
                 "cached": False,
@@ -452,8 +369,6 @@ class ObjectDetectorYOLO11:
                 }
             }
 
-            logger.debug(f"Processed frame {self.frame_count}: {len(detections)} detections in {total_processing_ms:.2f}ms")
-
         except Exception as e:
             self.errors_count += 1
             logger.error(f"Error processing frame {self.frame_count}: {e}")
@@ -467,13 +382,6 @@ class ObjectDetectorYOLO11:
         if not self.processing_times:
             return 0.0
         return sum(self.processing_times) / len(self.processing_times)
-
-    @property
-    def average_inference_time_ms(self):
-        """Get average inference time"""
-        if not self.inference_times:
-            return 0.0
-        return sum(self.inference_times) / len(self.inference_times)
 
     @property
     def fps(self):
