@@ -28,6 +28,8 @@ import threading
 import time
 import cv2
 import queue as pyqueue
+import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 # Add project root to path
@@ -149,7 +151,7 @@ def create_default_config():
             "max_workers": 2,  # Reduced from 3 to 2 workers
             "min_clip_cooldown": 120,  # OPTIMIZED: 2 min cooldown (was 35s) - prevents spam
             "use_mongodb": True,
-            "mongo_uri": "mongodb+srv://tesis:ucu2025tesis@visionflow.92xlyhu.mongodb.net/?retryWrites=true&w=majority&appName=visionflow",
+            "mongo_uri": os.getenv("MONGODB_URI"),
             "mongo_database": "visionflow",
             "mongo_collection": "events",
         },
@@ -414,6 +416,8 @@ def start_web_server(config, logger):
 
 
 def main():
+    load_dotenv()
+    load_dotenv(".env.local")
     try:
         config = create_default_config()
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import logging
 import sys
+import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 from src.app.core.events_manager.events_poster import EventPoster
@@ -80,7 +82,7 @@ def create_default_config():
             "trigger_interval": 30,
             "max_workers": 3,
             "use_mongodb": True,
-            "mongo_uri": "mongodb+srv://tesis:ucu2025tesis@visionflow.92xlyhu.mongodb.net/?retryWrites=true&w=majority&appName=visionflow",
+            "mongo_uri": os.getenv("MONGODB_URI"),
             "mongo_database": "visionflow",
             "mongo_collection": "events"
         },
@@ -162,6 +164,8 @@ def setup_orchestrator(components, config, logger):
 
 
 def main():
+    load_dotenv()
+    load_dotenv(".env.local")
     try:
         config = create_default_config()
 
