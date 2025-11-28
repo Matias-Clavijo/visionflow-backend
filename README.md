@@ -240,17 +240,16 @@ Recursos útiles:
 ## Ayuda y soporte
 
 - **Issues de GitHub**: problemas técnicos, bugs y solicitudes de features.
-- **Discusiones**: comparte ideas o casos de uso (habilita la pestaña Discussions).
+- **Discusiones**: comparte ideas o casos de uso (pestaña Discussions).
 
 ## Licencia
 
-Este proyecto se desarrolló como Trabajo de Grado en Ingeniería Informática. Consulta el archivo `LICENSE` (o contacta a los mantenedores) antes de usarlo en entornos comerciales. Al contribuir aceptas que tu aporte siga la misma licencia.
+Este proyecto se desarrolló como Trabajo de Grado en Ingeniería Informática. Contacta a los mantenedores antes de usarlo en entornos comerciales. Al contribuir aceptas que tu aporte siga la misma licencia.
 
 ## Agradecimientos
 
 - Equipo académico que impulsó el Trabajo de Grado.
-- Autores de plantillas y guías que inspiraron este README.
 
 ---
 
-VisionFlow2 evoluciona constantemente. Comparte mejoras, documenta tus hallazgos y ayuda a que más personas adopten arquitecturas de visión por computadora reutilizando estos componentes abiertos.
+VisionFlow busca evolucionar constantemente. Comparte mejoras, documenta tus hallazgos y ayuda a que más personas adopten arquitecturas de visión por computadora reutilizando estos componentes abiertos.
