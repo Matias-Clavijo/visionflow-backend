@@ -116,7 +116,6 @@ class DirectOrchestrator:
                     events_manager.process(frame_descriptor)
 
                 except Exception as e:
-                    print("error")
                     logger.error(f"Error in block {processor_name}: {str(e)}")
                     time.sleep(0.1)
 
@@ -142,7 +141,7 @@ class DirectOrchestrator:
                         try:
                             frame_descriptor: FrameDataDescriptor = specific_processor_queue.get_nowait()
                             frame = pool.to_numpy(frame_descriptor.shm_idx)
-                        except:
+                        except Exception:
                             time.sleep(0.001)  # Small sleep to prevent busy waiting
                             continue
                     else:
@@ -178,7 +177,6 @@ class DirectOrchestrator:
                     time.sleep(0.1)
 
         except Exception as e:
-            print("error")
             logger.error(f"Critical error in worker thread for {processor_name}: {str(e)}")
         finally:
             logger.info(f"Worker thread for block {processor_name} stopped.")
@@ -247,13 +245,12 @@ class DirectOrchestrator:
                             frame_count += 1
 
                     except Exception as e:
-                        print(f"errorrr {e}")
+                        logger.error(f"Error pulling frame from capturer queue: {e}")
                         continue
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user, terminating pipeline...")
         except Exception as e:
-            print("error")
             logger.error(f"Unexpected error in pipeline: {str(e)}")
             raise
         finally:

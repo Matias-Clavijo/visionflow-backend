@@ -29,12 +29,7 @@ class FrameQueueManager:
 
     def create_queue(self, name, maxsize=10):
         self.queues[name] = self.ctx.Queue(maxsize=maxsize)
-        logger.debug(f"Created multiprocessing queue '{name}' with maxsize {maxsize}")
         return self.queues[name]
-
-    def register_queues(self, queue_name, queue):
-        self.queues[queue_name] = queue
-        return self.queues[queue_name]
 
     def put_frame(self, frame_id, frame_array, metadata=None):
         metadata = metadata or {}
@@ -71,6 +66,3 @@ class FrameQueueManager:
 
     def get_queue(self, name):
         return self.queues[name]
-
-    def get_queues(self):
-        return self.queues

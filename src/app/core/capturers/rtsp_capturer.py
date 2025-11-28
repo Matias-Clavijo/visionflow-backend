@@ -17,8 +17,6 @@ class RtspCapturer:
         self.name = params.get("name")
         self.device_name = params.get("device_name")
         self.rtsp_url = params.get("rtsp_url")
-        self.username = params.get("username", "")
-        self.password = params.get("password", "")
 
         self.timeout = params.get("timeout", 10)
         self.buffer_size = params.get("buffer_size", 10)
@@ -94,7 +92,7 @@ class RtspCapturer:
         self.logger.info(f"🎬 Starting capture loop for {self.rtsp_url}")
         while self.running:
             if not self.cap or not self.output_queue:
-                self.logger.warning("⚠️ Missing cap or output_queue, waiting...")
+                self.logger.warning("Missing cap or output_queue, waiting...")
                 time.sleep(0.1)
                 continue
 
@@ -138,7 +136,7 @@ class RtspCapturer:
                 try:
                     self.output_queue.put_nowait(data)
                 except Exception as e:
-                    self.logger.error(f"❌ Failed to queue frame {data.frame_id}: {str(e)}")
+                    self.logger.error(f"Failed to queue frame {data.frame_id}: {str(e)}")
 
             except Exception as e:
                 self.logger.error(f"Error capturing frame from RTSP: {str(e)}")
@@ -184,7 +182,7 @@ class RtspCapturer:
         while not self.output_queue.empty():
             try:
                 self.output_queue.get_nowait()
-            except:
+            except Exception:
                 break
 
     def stop(self):
@@ -192,7 +190,6 @@ class RtspCapturer:
         self.running = False
 
         if self.thread and self.thread.is_alive():
-            self.logger.debug("Waiting for RTSP capture thread to stop...")
             self.thread.join(timeout=5)
             if self.thread.is_alive():
                 self.logger.warning("RTSP capture thread did not stop gracefully")
@@ -200,7 +197,6 @@ class RtspCapturer:
         if self.cap:
             try:
                 self.cap.release()
-                self.logger.debug("RTSP stream released successfully")
             except Exception as e:
                 self.logger.error(f"Error releasing RTSP stream: {e}")
             finally:
@@ -209,6 +205,5 @@ class RtspCapturer:
         if self.output_queue:
             try:
                 self._clear_queue()
-                self.logger.debug("Output queue cleared")
             except Exception as e:
                 self.logger.error(f"Error clearing queue: {e}")
